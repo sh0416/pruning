@@ -199,7 +199,7 @@ dense_w={
 }
 
 y_infer = dense_cnn_model(x, dense_w)
-tf.add_to_collection("y_conv", y_infer)
+tf.add_to_collection("y_infer", y_infer)
 
 train_dir = config.train_dir
 if not os.path.exists(train_dir):
@@ -290,8 +290,7 @@ if args.second_round == True:
 if args.third_round == True:
     # Third round: Transform iteratively pruned model to a sparse format and save it
     with tf.Session() as sess:
-        if args.second_round == False:
-            saver.restore(sess, os.path.join(train_dir, "model_ckpt_dense_pruned"))
+        saver.restore(sess, os.path.join(train_dir, "model_ckpt_dense_pruned"))
 
         # Transform final weights to a sparse form
         sparse_w = generate_sparse_dict(dense_w)
