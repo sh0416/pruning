@@ -173,12 +173,13 @@ def prune_dense(weight_arr, name="None", thresh=0.005):
     assert isinstance(weight_arr, np.ndarray)
     
     under_threshold = abs(weight_arr) < thresh
+    over_threshold = abs(weight_arr) >= thresh
     weight_arr[under_threshold] = 0
 
     # Count zero elements.
     count = np.sum(under_threshold)
     print("Non-zero count (Dense %s): %d" % (name, weight_arr.size - count))
-    return weight_arr, -under_threshold
+    return weight_arr, over_threshold
 
 
 def prune_sparse(weight_arr, name="None", thresh=0.005):

@@ -23,7 +23,7 @@ argparser.add_argument("-2", "--second_round", action="store_true",
     help="Run 2nd-round: apply pruning and its additional training")
 argparser.add_argument("-3", "--third_round", action="store_true",
     help="Run 3rd-round: transform model to a sparse format and save it")
-argparser.add_argument("-m", "--checkpoint", default="./model_ckpt_dense",
+argparser.add_argument("-m", "--checkpoint", default="train/model_ckpt_dense",
     help="Target checkpoint model file for 2nd and 3rd round")
 args = argparser.parse_args()
 
@@ -61,7 +61,7 @@ def apply_prune(tensors):
 
         # Store pruned weights as tensorflow objects
         dict_nzidxs[wl] = nzidxs
-        sess.run(weight.assign(weight_arr))
+        sess.run(tensor.assign(weight))
 
     return dict_nzidxs
 
@@ -71,21 +71,21 @@ def apply_prune_on_grads(grads_and_vars, dict_nzidxs):
     Mask gradients with pruned elements.
 
     Args:
-        grads_and_vars: 
-        dict_nzidx:
+        grads_and_vars: computed gradient by Optimizer.
+        dict_nzidxs: dictionary for each tensor with nonzero indexs.
     
     Returns:
     
     """
-    # For each weights with nonzero index list,
+    # For each pruned weights with nonzero index list,
     for key, nzidxs in dict_nzidxs.items():
         count = 0
         # For each gradients and variables,
         for grad, var in grads_and_vars:
             # Find matched tensor
             if var.name == key+":0":
-                nzidx_obj = tf.cast(tf.constant(nzidx), tf.float32)
-                grads_and_vars[count] = (tf.mul(nzidx_obj, grad), var)
+                nzidx_obj = tf.cast(tf.constant(nzidxs), tf.float32)
+                grads_and_vars[count] = (tf.multiply(nzidx_obj, grad), var)
             count += 1
 
     return grads_and_vars
@@ -239,54 +239,56 @@ if args.first_round == True:
 
 if args.second_round == True:
     # Second round: Retrain pruned model, start with default model: model_ckpt_dense
-    saver.restore(sess, args.checkpoint)
+    with tf.Session() as sess:
+        saver.restore(sess, args.checkpoint)
 
-    # Apply pruning on this context
-    dict_nzidx = apply_prune(dense_w)
+        # Apply pruning on this context
+        dict_nzidx = apply_prune(dense_w)
 
-    # save model objects to readable format
-    papl.print_weight_vars(dense_w, papl.config.target_all_layer,
-                           papl.config.target_p_dat, show_zero=papl.config.show_zero)
+        # save model objects to readable format
+        papl.print_weight_vars(dense_w, papl.config.target_all_layer,
+                               papl.config.target_p_dat, show_zero=papl.config.show_zero)
 
-    # Test prune-only networks
-    score = test(y_conv, y_, message="Second-round prune-only test accuracy")
-    papl.log("prune_accuracy.log", score)
+        # Test prune-only networks
+        score = test(y_infer, y_label, message="Second-round prune-only test accuracy")
+        papl.log("prune_accuracy.log", score)
 
-    # save model objects to serialized format
-    saver.save(sess, "./model_ckpt_dense_pruned")
+        # save model objects to serialized format
+        saver.save(sess, os.path.join(train_dir, "model_ckpt_dense_pruned"))
 
-    # Retrain networks
-    cross_entropy = -tf.reduce_sum(y_*tf.log(tf.clip_by_value(y_conv,1e-10,1.0)))
-    trainer = tf.train.AdamOptimizer(1e-4)
-    grads_and_vars = trainer.compute_gradients(cross_entropy)
-    grads_and_vars = apply_prune_on_grads(grads_and_vars, dict_nzidx)
-    train_step = trainer.apply_gradients(grads_and_vars)
+        # Retrain networks
+        cross_entropy = tf.nn.softmax_cross_entropy_with_logits(labels=y_label, logits=y_infer)
+        trainer = tf.train.AdamOptimizer(1e-4)
+        # Compute gradient and remove change for pruning weight
+        grads_and_vars = trainer.compute_gradients(cross_entropy)
+        grads_and_vars = apply_prune_on_grads(grads_and_vars, dict_nzidx)
+        train_step = trainer.apply_gradients(grads_and_vars)
 
-    correct_prediction = tf.equal(tf.argmax(y_conv,1), tf.argmax(y_,1))
-    accuracy = tf.reduce_mean(tf.cast(correct_prediction, "float"))
+        correct_prediction = tf.equal(tf.argmax(y_infer, 1), tf.argmax(y_label, 1))
+        accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
-    # Initialize firstly touched variables (mostly from accuracy calc.)
-    for var in tf.all_variables():
-        if tf.is_variable_initialized(var).eval() == False:
-            sess.run(tf.initialize_variables([var]))
+        # Initialize firstly touched variables (mostly from accuracy calc.)
+        for var in tf.all_variables():
+            if tf.is_variable_initialized(var).eval() == False:
+                sess.run(tf.variables_initializer([var]))
 
-    # Train x epochs additionally
-    for i in range(papl.config.retrain_iterations):
-        batch = mnist.train.next_batch(50)
-        if i%100 == 0:
-            train_accuracy = accuracy.eval(feed_dict={
-                x:batch[0], y_: batch[1], keep_prob: 1.0})
-            print("step %d, training accuracy %g"%(i, train_accuracy))
-        train_step.run(feed_dict={x: batch[0], y_: batch[1], keep_prob: 0.5})
+        # Train x epochs additionally
+        for i in range(papl.config.retrain_iterations):
+            batch = mnist.train.next_batch(50)
+            if i%100 == 0:
+                train_accuracy = accuracy.eval(feed_dict={
+                    x:batch[0], y_label: batch[1], keep_prob: 1.0})
+                print("step %d, training accuracy %g"%(i, train_accuracy))
+            train_step.run(feed_dict={x: batch[0], y_label: batch[1], keep_prob: 0.5})
 
-    # Save retrained variables to a desne form
-    # key = check_file_exists("model_ckpt_dense_retrained")
-    # saver.save(sess, key)
-    saver.save(sess, "model_ckpt_dense_retrained")
+        # Save retrained variables to a desne form
+        # key = check_file_exists("model_ckpt_dense_retrained")
+        # saver.save(sess, key)
+        saver.save(sess, os.path.join(train_dir, "model_ckpt_dense_retrained"))
 
-    # Test the retrained model
-    score = test(y_conv, y_, message="Second-round final test accuracy")
-    papl.log("final_accuracy.log", score)
+        # Test the retrained model
+        score = test(y_infer, y_label, message="Second-round final test accuracy")
+        papl.log("final_accuracy.log", score)
 
 if args.third_round == True:
     # Third round: Transform iteratively pruned model to a sparse format and save it
