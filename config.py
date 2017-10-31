@@ -19,7 +19,15 @@ th = ths.th90
 
 # CNN settings for pruned training
 target_layer = ["fc1", "fc2"]
+
+# Retrain iteration after pruning
 retrain_iterations = 10
+
+# Data settings
+show_zero = False
+
+# Train directory
+train_dir = 'train'
 
 # Output data lists: do not change this
 target_all_layer = _add_prefix(target_layer)
@@ -30,10 +38,6 @@ target_tp_dat = _complex_concat(target_all_layer, ["_tp.dat"])
 
 weight_all = target_dat + target_p_dat + target_tp_dat
 syn_all = ["in_conv1.syn", "in_conv2.syn", "in_fc1.syn", "in_fc2.syn"]
-
-# Data settings
-show_zero = False
-train_dir = 'train'
 
 # Graph settings
 alpha = 0.75

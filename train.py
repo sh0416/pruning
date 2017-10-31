@@ -32,10 +32,6 @@ if (args.first_round or args.second_round or args.third_round) == False:
     argparser.print_help()
     sys.exit()
 
-# Read dataset
-mnist = input_data.read_data_sets('/tmp/data/', one_hot=True)
-
-
 def apply_prune(tensors):
     """Pruning with given weight.
     
@@ -98,12 +94,12 @@ def generate_sparse_dict(dense_tensors):
         dense_tensors: weight with dense form.
 
     Returns:
-
+        sparse_tensors: tensor with sparse form.
     """
     sparse_tensors = {}
     for target in config.target_all_layer:
         weight = np.transpose(dense_tensors[target].eval())
-        indices, values, shape = papl.prune_tf_sparse(target_arr, name=target)
+        indices, values, shape = papl.prune_sparse(weight, name=target)
         sparse_tensors[target+"_idx"] = tf.Variable(indices, 
                 dtype=tf.int32, name=target+"_idx")
         sparse_tensors[target] = tf.Variable(values, dtype=tf.float32, name=target)
@@ -182,6 +178,9 @@ def check_file_exists(key):
             count += 1
     return key + ("-"+str(count) if count>0 else "")
 
+
+# Read dataset
+mnist = input_data.read_data_sets('/tmp/data/', one_hot=True)
 
 # Construct a dense model
 x = tf.placeholder(tf.float32, shape=[None, 784], name="x")
@@ -268,12 +267,12 @@ if args.second_round == True:
         accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
 
         # Initialize firstly touched variables (mostly from accuracy calc.)
-        for var in tf.all_variables():
+        for var in tf.global_variables():
             if tf.is_variable_initialized(var).eval() == False:
                 sess.run(tf.variables_initializer([var]))
 
         # Train x epochs additionally
-        for i in range(papl.config.retrain_iterations):
+        for i in range(config.retrain_iterations):
             batch = mnist.train.next_batch(50)
             if i%100 == 0:
                 train_accuracy = accuracy.eval(feed_dict={
@@ -282,8 +281,6 @@ if args.second_round == True:
             train_step.run(feed_dict={x: batch[0], y_label: batch[1], keep_prob: 0.5})
 
         # Save retrained variables to a desne form
-        # key = check_file_exists("model_ckpt_dense_retrained")
-        # saver.save(sess, key)
         saver.save(sess, os.path.join(train_dir, "model_ckpt_dense_retrained"))
 
         # Test the retrained model
@@ -292,20 +289,22 @@ if args.second_round == True:
 
 if args.third_round == True:
     # Third round: Transform iteratively pruned model to a sparse format and save it
-    if args.second_round == False:
-        saver.restore(sess, "./model_ckpt_dense_pruned")
+    with tf.Session() as sess:
+        if args.second_round == False:
+            saver.restore(sess, os.path.join(train_dir, "model_ckpt_dense_pruned"))
 
-    # Transform final weights to a sparse form
-    sparse_w = generate_sparse_dict(dense_w)
+        # Transform final weights to a sparse form
+        sparse_w = generate_sparse_dict(dense_w)
 
-    # Initialize new variables in a sparse form
-    for var in tf.all_variables():
-        if tf.is_variable_initialized(var).eval() == False:
-            sess.run(tf.initialize_variables([var]))
+        # Initialize new variables in a sparse form
+        for var in tf.global_variables():
+            if tf.is_variable_initialized(var).eval() == False:
+                sess.run(tf.variables_initializer([var]))
 
-    # Save model objects to readable format
-    papl.print_weight_vars(dense_w, papl.config.target_all_layer,
-                           papl.config.target_tp_dat, show_zero=papl.config.show_zero)
-    # Save model objects to serialized format
-    final_saver = tf.train.Saver(sparse_w)
-    final_saver.save(sess, "./model_ckpt_sparse_retrained") 
+        # Save model objects to readable format
+        papl.print_weight_vars(dense_w, config.target_all_layer,
+                               config.target_tp_dat, show_zero=config.show_zero)
+
+        # Save model objects to serialized format
+        final_saver = tf.train.Saver(sparse_w)
+        final_saver.save(sess, os.path.join(train_dir, "model_ckpt_sparse_retrained"))
