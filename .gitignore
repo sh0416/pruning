@@ -1,2 +1,4 @@
+*.pyc
+data/
 train/
 __pycache__/
